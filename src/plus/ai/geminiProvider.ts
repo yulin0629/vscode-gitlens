@@ -1,6 +1,8 @@
 import type { CancellationToken } from 'vscode';
 import type { Response } from '@env/fetch';
+import { fetch } from '@env/fetch';
 import { geminiProviderDescriptor as provider } from '../../constants.ai';
+import { configuration } from '../../system/-webview/configuration';
 import type { AIActionType, AIModel } from './models/model';
 import { OpenAICompatibleProviderBase } from './openAICompatibleProviderBase';
 
@@ -25,127 +27,6 @@ const models: GeminiModel[] = [
 		maxTokens: { input: 1048576, output: 65536 },
 		provider: provider,
 	},
-	{
-		id: 'gemini-2.5-flash-preview-05-20',
-		name: 'Gemini 2.5 Flash (Preview)',
-		maxTokens: { input: 1048576, output: 65536 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.5-flash-preview-04-17',
-		name: 'Gemini 2.5 Flash (Preview)',
-		maxTokens: { input: 1048576, output: 65536 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.5-pro-preview-06-05',
-		name: 'Gemini 2.5 Pro (Preview)',
-		maxTokens: { input: 1048576, output: 65536 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.5-pro-preview-03-25',
-		name: 'Gemini 2.5 Pro (Preview)',
-		maxTokens: { input: 1048576, output: 65536 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.5-pro-exp-03-25',
-		name: 'Gemini 2.5 Pro (Experimental)',
-		maxTokens: { input: 1048576, output: 65536 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.0-flash',
-		name: 'Gemini 2.0 Flash',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-	},
-	{
-		id: 'gemini-2.0-flash-001',
-		name: 'Gemini 2.0 Flash',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.0-flash-lite',
-		name: 'Gemini 2.0 Flash-Lite',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-	},
-	{
-		id: 'gemini-2.0-flash-lite-001',
-		name: 'Gemini 2.0 Flash-Lite',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.0-flash-lite-preview-02-05',
-		name: 'Gemini 2.0 Flash-Lite (Preview)',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.0-pro-exp-02-05',
-		name: 'Gemini 2.0 Pro (Experimental)',
-		maxTokens: { input: 2097152, output: 8192 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.0-flash-thinking-exp-01-21',
-		name: 'Gemini 2.0 Flash Thinking (Experimental)',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-2.0-flash-exp',
-		name: 'Gemini 2.0 Flash (Experimental)',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-exp-1206',
-		name: 'Gemini Experimental 1206',
-		maxTokens: { input: 2097152, output: 8192 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-exp-1121',
-		name: 'Gemini Experimental 1121',
-		maxTokens: { input: 2097152, output: 8192 },
-		provider: provider,
-		hidden: true,
-	},
-	{
-		id: 'gemini-1.5-pro',
-		name: 'Gemini 1.5 Pro',
-		maxTokens: { input: 2097152, output: 8192 },
-		provider: provider,
-	},
-	{
-		id: 'gemini-1.5-flash',
-		name: 'Gemini 1.5 Flash',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-	},
-	{
-		id: 'gemini-1.5-flash-8b',
-		name: 'Gemini 1.5 Flash 8B',
-		maxTokens: { input: 1048576, output: 8192 },
-		provider: provider,
-	},
 ];
 
 export class GeminiProvider extends OpenAICompatibleProviderBase<typeof provider.id> {
@@ -156,8 +37,124 @@ export class GeminiProvider extends OpenAICompatibleProviderBase<typeof provider
 		keyUrl: 'https://aistudio.google.com/app/apikey',
 	};
 
-	getModels(): Promise<readonly AIModel<typeof provider.id>[]> {
-		return Promise.resolve(models);
+	private cachedModels: GeminiModel[] | undefined;
+	private cacheExpiry: number = 0;
+
+	async getModels(): Promise<readonly AIModel<typeof provider.id>[]> {
+		// Check cache first (15 minutes expiry)
+		const now = Date.now();
+		if (this.cachedModels && this.cacheExpiry > now) {
+			return this.cachedModels;
+		}
+
+		try {
+			// Try to fetch models from API
+			const apiKey = await this.getApiKey(true);
+			if (apiKey) {
+				const fetchedModels = await this.fetchModelsFromAPI(apiKey);
+				if (fetchedModels.length > 0) {
+					this.cachedModels = fetchedModels;
+					this.cacheExpiry = now + (15 * 60 * 1000); // Cache for 15 minutes
+					return fetchedModels;
+				}
+			}
+		} catch {
+			// Fall back to hardcoded models if API fetch fails
+		}
+
+		// Return hardcoded models as fallback
+		return models;
+	}
+
+	private async fetchModelsFromAPI(apiKey: string): Promise<GeminiModel[]> {
+		try {
+			const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
+				headers: {
+					'Accept': 'application/json',
+					'Content-Type': 'application/json',
+				},
+				method: 'GET',
+			});
+
+			if (!response.ok) {
+				throw new Error(`Failed to fetch models: ${response.status}`);
+			}
+
+			interface GeminiAPIModel {
+				name: string;
+				displayName: string;
+				inputTokenLimit: number;
+				outputTokenLimit: number;
+				supportedGenerationMethods?: string[];
+			}
+
+			interface GeminiAPIResponse {
+				models: GeminiAPIModel[];
+			}
+
+			const data = (await response.json()) as GeminiAPIResponse;
+
+			// Filter for Gemini 2.5+ models that support generateContent
+			// Exclude TTS models
+			const allModels = data.models
+				.filter(m =>
+					m.name.startsWith('models/gemini-') &&
+					m.supportedGenerationMethods?.includes('generateContent') &&
+					(m.name.includes('2.5') || m.name.includes('3.') || m.name.includes('4.') || m.name.includes('5.')) &&
+					!m.name.toLowerCase().includes('tts') // Exclude TTS models
+				)
+				.map<GeminiModel>(m => ({
+					id: m.name.replace('models/', ''),
+					name: m.displayName || m.name.replace('models/', ''),
+					maxTokens: {
+						input: m.inputTokenLimit || 1048576,
+						output: m.outputTokenLimit || 65536
+					},
+					provider: provider,
+					// Set default for gemini-2.5-flash
+					default: m.name === 'models/gemini-2.5-flash',
+				}));
+			
+			// Group models by base name to filter out previews when stable exists
+			const modelGroups = new Map<string, GeminiModel[]>();
+			for (const model of allModels) {
+				// Extract base model name (e.g., "gemini-2.5-pro" from "gemini-2.5-pro-preview-03-25")
+				let baseName = model.id;
+				
+				// Remove preview and date suffixes
+				baseName = baseName
+					.replace(/-preview.*$/, '')
+					.replace(/-\d{2}-\d{2}$/, '')
+					.replace(/-lite$/, '-lite'); // Keep -lite suffix
+				
+				if (!modelGroups.has(baseName)) {
+					modelGroups.set(baseName, []);
+				}
+				modelGroups.get(baseName)!.push(model);
+			}
+			
+			// Select the best model from each group
+			const geminiModels: GeminiModel[] = [];
+			for (const [baseName, models] of modelGroups) {
+				// Sort: stable versions first, then by name
+				models.sort((a, b) => {
+					const aIsStable = !a.id.includes('preview');
+					const bIsStable = !b.id.includes('preview');
+					if (aIsStable !== bIsStable) {
+						return aIsStable ? -1 : 1; // Stable first
+					}
+					return a.id.localeCompare(b.id);
+				});
+				
+				// Add only the first (best) model from each group
+				geminiModels.push(models[0]);
+			}
+
+			return geminiModels.length > 0 ? geminiModels : models;
+		} catch (error) {
+			// Return empty array on error to fall back to hardcoded models
+			return [];
+		}
 	}
 
 	protected getUrl(_model: AIModel<typeof provider.id>): string {
