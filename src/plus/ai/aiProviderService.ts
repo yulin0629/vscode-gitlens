@@ -292,6 +292,10 @@ export class AIProviderService implements Disposable {
 	});
 	private _provider: AIProvider | undefined;
 	private _providerDisposable: Disposable | undefined;
+	
+	// Cache for providers configuration to avoid re-checking all providers
+	private _providersConfigCache: Map<AIProviders, AIProviderDescriptorWithConfiguration> | undefined;
+	private _providersConfigCacheExpiry: number = 0;
 
 	constructor(
 		private readonly container: Container,
@@ -425,6 +429,12 @@ export class AIProviderService implements Disposable {
 	}
 
 	async getProvidersConfiguration(): Promise<Map<AIProviders, AIProviderDescriptorWithConfiguration>> {
+		// Check cache first (5 minutes expiry)
+		const now = Date.now();
+		if (this._providersConfigCache && this._providersConfigCacheExpiry > now) {
+			return this._providersConfigCache;
+		}
+		
 		const orgAiConfig = getOrgAIConfig();
 		const promises = await Promise.allSettled(
 			map(
@@ -436,7 +446,14 @@ export class AIProviderService implements Disposable {
 					] as const,
 			),
 		);
-		return new Map<AIProviders, AIProviderDescriptorWithConfiguration>(getSettledValues(promises));
+		
+		const result = new Map<AIProviders, AIProviderDescriptorWithConfiguration>(getSettledValues(promises));
+		
+		// Cache the result for 5 minutes
+		this._providersConfigCache = result;
+		this._providersConfigCacheExpiry = now + (5 * 60 * 1000);
+		
+		return result;
 	}
 
 	private async ensureProviderConfigured(provider: AIProviderDescriptorWithType, silent: boolean): Promise<boolean> {
@@ -1999,6 +2016,10 @@ export class AIProviderService implements Disposable {
 	}
 
 	resetProviderKey(provider: AIProviders, silent?: boolean): void {
+		// Clear the providers configuration cache when keys change
+		this._providersConfigCache = undefined;
+		this._providersConfigCacheExpiry = 0;
+		
 		if (!silent) {
 			void this.container.storage.getSecret(`gitlens.${provider}.key`).then(key => {
 				if (key) {
